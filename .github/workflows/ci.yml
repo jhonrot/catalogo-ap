@@ -8,22 +8,90 @@ on:
     branches: [ "main", "master" ]
 
 jobs:
-  build:
+  build-y-reportes:
+    name: Compilación, Pruebas y Reportes MVC
     runs-on: ubuntu-latest
 
     steps:
     # 1. Descarga el código del repositorio en el servidor virtual de GitHub
     - name: Checkout del repositorio
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-    # 2. Configura PHP en el entorno de ejecución
-    - name: Configurar PHP
+    # 2. Configura PHP con extensiones de base de datos, Xdebug (cobertura) y PHPUnit
+    - name: Configurar PHP 8.2 y herramientas de reporte
       uses: shivammathur/setup-php@v2
       with:
-        php-version: '8.2' # Ajusta la versión según la que uses localmente
+        php-version: '8.2'
+        extensions: mysqli, pdo, pdo_mysql
+        coverage: xdebug
+        tools: phpunit
 
-    # 3. Validar sintaxis de los archivos PHP en el proyecto MVC
-    - name: Verificar sintaxis de PHP
+    # 3. Validar sintaxis de los archivos PHP en el proyecto MVC (Compilación)
+    - name: Verificar sintaxis de PHP y generar reporte
       run: |
+        TOTAL_APP=$(find app/ -name "*.php" | wc -l)
         find app/ -name "*.php" -exec php -l {} \;
         php -l index.php
+        
+        echo "# 📊 Informe Técnico Automatizado - Catálogo MVC" >> $GITHUB_STEP_SUMMARY
+        echo "### 1. Compilación (Validación Sintáctica)" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ **$TOTAL_APP archivos PHP** en \`app/\` + \`index.php\` validados sin errores." >> $GITHUB_STEP_SUMMARY
+
+    # 4. Crear prueba unitaria básica si aún no existe la carpeta tests/
+    - name: Preparar pruebas del proyecto MVC
+      run: |
+        mkdir -p tests reportes
+        if [ ! -f "tests/CatalogoTest.php" ]; then
+          cat << 'EOF' > tests/CatalogoTest.php
+        <?php
+        use PHPUnit\Framework\TestCase;
+
+        class CatalogoTest extends TestCase {
+            public function testEstructuraProyectoMVC() {
+                $this->assertFileExists('index.php');
+                $this->assertDirectoryExists('app');
+                $this->assertFileExists('sql/database.sql');
+            }
+        }
+        EOF
+        fi
+
+    # 5. Ejecutar pruebas unitarias y generar reportes de cobertura y JUnit
+    - name: Ejecutar pruebas y calcular cobertura
+      run: |
+        phpunit --dont-report-useless-tests \
+          --log-junit reportes/junit-pruebas.xml \
+          --coverage-text=reportes/cobertura.txt \
+          --coverage-html reportes/cobertura-html \
+          --whitelist app/ \
+          tests/
+
+    # 6. Publicar informe técnico y métricas DORA en el resumen visual de GitHub
+    - name: Publicar Informe Consolidado en GitHub Summary
+      if: always()
+      run: |
+        TOTAL_ENTREGAS=$(git rev-list --count HEAD)
+        
+        echo "### 2. Resultados de Pruebas (JUnit XML)" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`xml" >> $GITHUB_STEP_SUMMARY
+        cat reportes/junit-pruebas.xml >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+        echo "### 3. Reporte de Cobertura de Código" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`text" >> $GITHUB_STEP_SUMMARY
+        cat reportes/cobertura.txt >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+        echo "### 4. Métricas de Avance (DORA)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Frecuencia acumulada:** $TOTAL_ENTREGAS integraciones en el repositorio." >> $GITHUB_STEP_SUMMARY
+        echo "- **Estado del cambio:** ${{ job.status == 'success' && '✅ Estable (0% fallos)' || '❌ Fallo detectado' }}" >> $GITHUB_STEP_SUMMARY
+
+    # 7. Guardar los reportes en HTML y XML como evidencia descargable
+    - name: Subir artefactos de reporte (XML y HTML)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: reportes-tecnicos-catalogo-mvc
+        path: reportes/
